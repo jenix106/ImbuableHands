@@ -1,87 +1,60 @@
-﻿using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Collections.Generic;
 using ThunderRoad;
 using UnityEngine;
 
 namespace ImbuableHands
 {
-    public class HandsModule : LevelModule
+    public class HandsModule : ThunderScript
     {
-        public override IEnumerator OnLoadCoroutine()
+        [ModOption(name: "Allow Imbuing", tooltip: "Enables/disables imbuing your hands", valueSourceName: nameof(booleanOption), defaultValueIndex = 0)]
+        public static bool Enabled = true;
+        public static ModOptionBool[] booleanOption =
         {
-            EventManager.onPossess += EventManager_onPossess;
-            return base.OnLoadCoroutine();
+            new ModOptionBool("Enabled", true),
+            new ModOptionBool("Disabled", false)
+        };
+        public static Dictionary<string, Imbue> rightImbues = new Dictionary<string, Imbue>();
+        public static Dictionary<string, Imbue> leftImbues = new Dictionary<string, Imbue>();
+        public override void ScriptEnable()
+        {
+            base.ScriptEnable();
+            EventManager.OnSpellUsed += EventManager_OnSpellUsed;
         }
-
-        private void EventManager_onPossess(Creature creature, EventTime eventTime)
+        private void EventManager_OnSpellUsed(string spellId, Creature creature, Side side)
         {
-            if (eventTime == EventTime.OnEnd) creature.gameObject.AddComponent<HandsPlayer>();
-        }
-    }
-    public class HandsPlayer : MonoBehaviour
-    {
-        Creature player;
-        public void Start()
-        {
-            player = GetComponent<Creature>();
-            player.handLeft.gameObject.AddComponent<Hands>();
-            player.handRight.gameObject.AddComponent<Hands>();
-        }
-    }
-    public class Hands : MonoBehaviour
-    {
-        Item item;
-        RagdollHand hand;
-        SpellCaster caster;
-        public void Start()
-        {
-            GameObject gameObject = new GameObject();
-            item = gameObject.AddComponent<Item>();
-            item.data = new ItemData
+            if (creature?.player != null && creature?.GetHand(side) is RagdollHand hand && !hand.caster.isFiring && hand.playerHand.controlHand.gripPressed && Catalog.GetData<SpellCastCharge>(spellId) is SpellCastCharge spell && spell.imbueEnabled && Enabled && hand.grabbedHandle == null)
             {
-                tier = 4
-            };
-            item.lastHandler = hand;
-            item.gameObject.transform.position = Vector3.zero;
-            item.rb.isKinematic = true;
-            hand = GetComponent<RagdollHand>();
-            caster = hand.caster;
-            hand.colliderGroup.Load(Catalog.GetData<ColliderGroupData>("CrystalStaff"));
-            hand.colliderGroup.gameObject.AddComponent<HandsColliderGroup>();
-            hand.collisionHandler.OnCollisionStartEvent += CollisionHandler_OnCollisionStartEvent;
-            hand.collisionHandler.OnCollisionStopEvent += CollisionHandler_OnCollisionStopEvent;
-            hand.collisionHandler.item = item;
-            hand.colliderGroup.imbueShoot = hand.grip;
-        }
-
-        private void CollisionHandler_OnCollisionStopEvent(CollisionInstance collisionInstance)
-        {
-            if (hand.colliderGroup.imbue?.spellCastBase != null)
-                hand.colliderGroup.imbue.spellCastBase.OnImbueCollisionStop(collisionInstance);
-        }
-
-        private void CollisionHandler_OnCollisionStartEvent(CollisionInstance collisionInstance)
-        {
-            if (hand.colliderGroup.imbue?.spellCastBase != null)
-                hand.colliderGroup.imbue.spellCastBase.OnImbueCollisionStart(collisionInstance);
-        }
-
-        public void Update()
-        {
-            if(hand.playerHand?.controlHand != null && hand.playerHand.controlHand.gripPressed && caster?.spellInstance != null && caster.isFiring && hand.grabbedHandle == null &&
-                typeof(SpellCastCharge).IsAssignableFrom(caster.spellInstance.GetType()) && Catalog.GetData<SpellCastCharge>(caster.spellInstance.id).imbueEnabled)
-            {
-                if (!hand.renderers.IsNullOrEmpty())
+                if (hand.GetComponent<Item>() == null)
                 {
-                    hand.colliderGroup.imbueEffectRenderer = hand.renderers[0].renderer;
-                    hand.colliderGroup.imbueEmissionRenderer = hand.renderers[0].renderer;
+                    Item item = hand.gameObject.AddComponent<Item>();
+                    item.Load(Catalog.GetData<ItemData>("Hand"));
+                    hand.collisionHandler.item = item;
+                    hand.colliderGroup.collisionHandler.item = item;
                 }
-                SpellCastCharge instance = Catalog.GetData<SpellCastCharge>(caster.spellInstance.id);
-                hand.colliderGroup.imbue.Transfer(instance, instance.imbueRate * Time.deltaTime);
+                if (hand.colliderGroup?.modifier?.imbueType != ColliderGroupData.ImbueType.Crystal)
+                {
+                    hand.colliderGroup.modifier.imbueType = ColliderGroupData.ImbueType.Crystal;
+                    hand.colliderGroup.imbueShoot = hand.grip;
+                }
+                if (hand.colliderGroup?.GetComponent<HandsColliderGroup>() == null)
+                {
+                    hand.colliderGroup?.gameObject.AddComponent<HandsColliderGroup>();
+                }
+                foreach (Creature.RendererData renderer in hand.renderers)
+                {
+                    if (!hand.otherHand.renderers.Contains(renderer))
+                    {
+                        hand.colliderGroup.imbueEffectRenderer = renderer.renderer;
+                        hand.colliderGroup.imbueEmissionRenderer = renderer.renderer;
+                        break;
+                    }
+                }
+                if (hand.colliderGroup?.imbue?.spellCastBase?.id != spellId && !(side == Side.Right ? rightImbues : leftImbues).ContainsKey(spellId))
+                {
+                    hand.colliderGroup.imbue = hand.colliderGroup.gameObject.AddComponent<Imbue>();
+                    (side == Side.Right ? rightImbues : leftImbues).Add(spellId, hand.colliderGroup.imbue);
+                }
+                (side == Side.Right ? rightImbues : leftImbues)[spellId]?.Transfer(spell, (side == Side.Right ? rightImbues : leftImbues)[spellId].maxEnergy);
             }
         }
     }
